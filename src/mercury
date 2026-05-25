@@ -3967,6 +3967,69 @@ def cmd_post_share(args):
     else:
         print('  ❌ Post failed — check ~/.mercury/mattermost.env')
 
+
+
+def cmd_suggest(args):
+    """Post a research idea as a GitHub Issue to humanvalueexchange/mercury."""
+    import json as _json
+
+    # Load token
+    env_file = os.path.expanduser('~/.mercury/github.env')
+    token = None
+    if os.path.exists(env_file):
+        for line in open(env_file).read().splitlines():
+            if line.startswith('MERCURY_GITHUB_TOKEN='):
+                token = line.split('=', 1)[1].strip()
+    if not token:
+        print(f'  ❌ MERCURY_GITHUB_TOKEN not found in ~/.mercury/github.env')
+        return
+
+    title  = getattr(args, 'title', None) or ''
+    body   = getattr(args, 'body', None) or ''
+
+    if not title:
+        print(f'  ❌ Title required.')
+        return
+
+    # Build research template if structured fields provided
+    hypothesis = getattr(args, 'hypothesis', None)
+    context    = getattr(args, 'context', None)
+    direction  = getattr(args, 'direction', None)
+    risks      = getattr(args, 'risks', None)
+
+    if hypothesis or context or direction or risks:
+        body_parts = []
+        if hypothesis: body_parts.append(f'## Hypothesis\n{hypothesis}')
+        if context:    body_parts.append(f'## Context\n{context}')
+        if direction:  body_parts.append(f'## Proposed Direction\n{direction}')
+        if risks:      body_parts.append(f'## Unknowns / Risks\n{risks}')
+        body_parts.append(f'\n---\n*Submitted by Mercury (autonomous node agent)*')
+        body = '\n\n'.join(body_parts)
+    elif not body:
+        body = '*Submitted by Mercury (autonomous node agent)*'
+
+    labels = ['research', 'domain:ai']
+    payload = _json.dumps({'title': title, 'body': body, 'labels': labels}).encode()
+
+    import urllib.request as _ur
+    req = _ur.Request(
+        'https://api.github.com/repos/humanvalueexchange/mercury/issues',
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+            'X-GitHub-Api-Version': '2022-11-28',
+        },
+        method='POST'
+    )
+    try:
+        with _ur.urlopen(req, timeout=15) as r:
+            data = _json.loads(r.read())
+        print(f'  ✅ Issue #{data["number"]} created: {data["html_url"]}')
+    except Exception as e:
+        print(f'  ❌ Failed to create issue: {e}')
+
 def cmd_version(args):
     info, _ = lncli("getinfo")
     lnd_ver = info.get("version", "unknown") if info else "unavailable"
@@ -3985,7 +4048,7 @@ def cmd_shell(args=None):
 
     COMMANDS = {"status", "channels", "invoices", "sync", "peers",
                 "backup", "logs", "pay", "invoice", "charge", "deposit", "magma", "alerts", "health",
-                "rebalance", "channel", "nodes", "transactions", "fees", "payments", "routing", "version", "help", "exit", "quit", "clear", "cls", "post-share"}
+                "rebalance", "channel", "nodes", "transactions", "fees", "payments", "routing", "version", "help", "exit", "quit", "clear", "cls", "post-share", "suggest"}
 
     dispatch = {
         "status":    cmd_status,
@@ -4011,6 +4074,7 @@ def cmd_shell(args=None):
         "health":    cmd_health,
         "version":   cmd_version,
         "post-share": cmd_post_share,
+        "suggest":    cmd_suggest,
     }
 
     # Show brief status on entry
@@ -4070,6 +4134,24 @@ def cmd_shell(args=None):
 
         cmd = parts[0].lower() if parts else ""
         rest = parts[1:]
+
+        if cmd == "suggest":
+            if not rest:
+                print(f"  {Y}Usage: suggest \"Title\" [--hypothesis \"...\" --context \"...\" --direction \"...\" --risks \"...\"] [--body \"...\"]{NC}")
+                continue
+            _sg = argparse.Namespace(
+                title=rest[0],
+                body=None, hypothesis=None, context=None, direction=None, risks=None
+            )
+            i = 1
+            while i < len(rest):
+                for flag in ('--body','--hypothesis','--context','--direction','--risks'):
+                    if rest[i] == flag and i + 1 < len(rest):
+                        setattr(_sg, flag.lstrip('-'), rest[i+1]); i += 2; break
+                else:
+                    i += 1
+            cmd_suggest(_sg)
+            continue
 
         if cmd == "post-share":
             if not rest:
@@ -4345,6 +4427,14 @@ def main():
     ps_p.add_argument("--channel", default="growth", help="Mattermost channel (default: growth)")
     ps_p.add_argument("--note", default=None, help="Optional context note")
 
+    sg_p = sub.add_parser("suggest", help="Post a research idea as a GitHub Issue")
+    sg_p.add_argument("title", help="Issue title")
+    sg_p.add_argument("--body",       default=None, help="Full issue body (freeform)")
+    sg_p.add_argument("--hypothesis", default=None, help="Research hypothesis")
+    sg_p.add_argument("--context",    default=None, help="Context / background")
+    sg_p.add_argument("--direction",  default=None, help="Proposed direction")
+    sg_p.add_argument("--risks",      default=None, help="Unknowns and risks")
+
     args = parser.parse_args()
 
     dispatch = {
@@ -4374,6 +4464,7 @@ def main():
         "shell":    cmd_shell,
         "post":     cmd_post,
         "post-share": cmd_post_share,
+        "suggest":    cmd_suggest,
     }
 
     if args.command is None:
